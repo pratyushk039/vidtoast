@@ -1,0 +1,11 @@
+body {
+  margin: 0;
+  font-family: 'Roboto', sans-serif;
+  background-color: #1a1a1a;
+  color: #fff;
+}
+
+input[type="file"] {
+  color: #fff;
+  margin-bottom: 10px;
+}
