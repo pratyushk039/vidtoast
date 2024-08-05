@@ -1,28 +1,23 @@
 import React, { useState, useEffect } from "react";
 import axios from "axios";
 import ReactPlayer from "react-player";
-import { Box, Button, Card, CardContent, CardActions, Grid, Typography } from "@mui/material";
-import { createTheme, ThemeProvider } from "@mui/material/styles";
-import './App.css';
-
-const theme = createTheme({
-  palette: {
-    primary: {
-      main: "#9c27b0",
-    },
-    background: {
-      default: "#1a1a1a",
-      paper: "#2c2c2c",
-    },
-    text: {
-      primary: "#fff",
-      secondary: "#fff",
-    },
-  },
-});
+import {
+  Container,
+  Row,
+  Col,
+  Card,
+  Button,
+  Form,
+  Alert,
+  Navbar,
+  Nav,
+} from "react-bootstrap";
+import { FaBars } from "react-icons/fa"; // Icon for hamburger menu
+import "bootstrap/dist/css/bootstrap.min.css";
+import "./App.css"; // Custom CSS for additional styling
 
 function App() {
-  const [mainVideo, setMainVideo] = useState("");
+  const [mainVideo, setMainVideo] = useState(null);
   const [likes, setLikes] = useState(0);
   const [videos, setVideos] = useState([]);
   const [selectedFile, setSelectedFile] = useState(null);
@@ -37,84 +32,150 @@ function App() {
       const response = await axios.get("http://localhost:8000/videos");
       setVideos(response.data);
       if (response.data.length > 0) {
-        setMainVideo(response.data[0].path);
+        setMainVideo(response.data[0]);
+        setLikes(response.data[0].likes);
       }
     } catch (error) {
       console.error("Error fetching videos", error);
     }
   };
 
-  const incrementLikes = () => {
-    setLikes(likes + 1);
+  const incrementLikes = async () => {
+    try {
+      const response = await axios.post(
+        `http://localhost:8000/video/${mainVideo._id}/like`
+      );
+      setLikes(response.data.likes);
+    } catch (error) {
+      console.error("Error updating likes", error);
+    }
   };
 
-  const onFileChange = (event) => {
+  const handleVideoClick = (video) => {
+    setMainVideo(video);
+    setLikes(video.likes);
+  };
+
+  const handleFileChange = (event) => {
     setSelectedFile(event.target.files[0]);
   };
 
-  const onFileUpload = async () => {
+  const handleUpload = async (event) => {
+    event.preventDefault();
+    if (!selectedFile) {
+      setUploadMessage("Please select a file to upload.");
+      return;
+    }
+
     const formData = new FormData();
     formData.append("video", selectedFile);
 
     try {
-      const response = await axios.post("http://localhost:8000/upload", formData, {
-        headers: {
-          "Content-Type": "multipart/form-data",
-        },
+      await axios.post("http://localhost:8000/upload", formData, {
+        headers: { "Content-Type": "multipart/form-data" },
       });
-      setUploadMessage(response.data);
-      fetchVideos(); // Refresh the video list
+      setUploadMessage("File uploaded successfully!");
+      fetchVideos(); // Refresh the video list after upload
     } catch (error) {
-      console.error("There was an error uploading the file!", error);
+      console.error("Error uploading file", error);
+      setUploadMessage("Error uploading file.");
     }
   };
 
   return (
-    <ThemeProvider theme={theme}>
-      <Box sx={{ backgroundColor: "background.default", color: "text.primary", minHeight: "100vh", p: 3 }}>
-        <Grid container spacing={3}>
-          <Grid item xs={12}>
-            <Card sx={{ backgroundColor: "background.paper" }}>
-              <ReactPlayer url={`http://localhost:8000${mainVideo}`} controls width="100%" height="500px" />
-              <CardContent>
-                <Typography variant="h5" component="div">
-                  Main Video
-                </Typography>
-              </CardContent>
-              <CardActions>
-                <Button variant="contained" color="primary" onClick={incrementLikes}>
-                  Like: {likes}
-                </Button>
-              </CardActions>
+    <Container fluid className="App bg-dark text-white">
+      <Navbar
+        expand="lg"
+        className="mb-4"
+        style={{
+          backgroundImage:
+            "linear-gradient(to right, black, purple, black)",
+        }}
+      >
+        <Container>
+          <Navbar.Brand href="#home" className="text-white">
+            Vidtoast
+          </Navbar.Brand>
+          <Navbar.Toggle aria-controls="basic-navbar-nav">
+            <FaBars className="text-white" />
+          </Navbar.Toggle>
+          <Navbar.Collapse id="basic-navbar-nav">
+            <Nav className="ml-auto">
+              <Nav.Link href="#home" className="text-white">
+                Home
+              </Nav.Link>
+              <Nav.Link href="#upload" className="text-white">
+                Upload
+              </Nav.Link>
+            </Nav>
+          </Navbar.Collapse>
+        </Container>
+      </Navbar>
+
+      <Row className="justify-content-center">
+        <Col md={8} className="video-player-container">
+          {mainVideo ? (
+            <>
+              <ReactPlayer
+                url={`http://localhost:8000/video/${mainVideo.filename}`}
+                controls
+                width="100%"
+                height="100%"
+                className="rounded border border-white"
+              />
+              <Button
+                variant="outline-light"
+                className="mt-2"
+                onClick={incrementLikes}
+              >
+                Like ({likes})
+              </Button>
+            </>
+          ) : (
+            <p>Loading...</p>
+          )}
+        </Col>
+      </Row>
+
+      <Row className="mt-4">
+        {videos.map((video) => (
+          <Col key={video._id} md={3}>
+            <Card
+              className="bg-dark text-white"
+              onClick={() => handleVideoClick(video)}
+            >
+              <Card.Img
+                variant="top"
+                src={`http://localhost:8000/${video.thumbnail}`}
+              />
+              <Card.Body>
+                <Card.Title>{video.filename}</Card.Title>
+                <Card.Text>Likes: {video.likes}</Card.Text>
+              </Card.Body>
             </Card>
-          </Grid>
-          <Grid item xs={12}>
-            <input type="file" onChange={onFileChange} style={{ marginBottom: "10px", color: "#fff" }} />
-            <Button variant="contained" color="primary" onClick={onFileUpload}>
+          </Col>
+        ))}
+      </Row>
+
+      <Row className="mt-4">
+        <Col md={6}>
+          <Form onSubmit={handleUpload}>
+            <Form.Group>
+              <Form.Label>Upload Video</Form.Label>
+              <Form.Control type="file" onChange={handleFileChange} />
+            </Form.Group>
+            <Button type="submit" variant="outline-light" className="mt-2">
               Upload
             </Button>
-            {uploadMessage && <Typography>{uploadMessage}</Typography>}
-          </Grid>
-          {videos.slice(0, 4).map((video, index) => (
-            <Grid item xs={3} key={index}>
-              <Card sx={{ backgroundColor: "background.paper" }}>
-                <img
-                  src={`http://localhost:8000${video.thumbnail}`}
-                  alt={`Thumbnail for ${video.filename}`}
-                  onClick={() => setMainVideo(video.path)}
-                  style={{ width: "100%", cursor: "pointer" }}
-                />
-                <CardContent>
-                  <Typography variant="body2" color="text.secondary">
-                    {video.filename}
-                  </Typography>
-                </CardContent>
-              </Card>
-            </Grid>
-          ))}
-        </Grid>
-      </Box>
-    </ThemeProvider>
+            {uploadMessage && (
+              <Alert variant="info" className="mt-2">
+                {uploadMessage}
+              </Alert>
+            )}
+          </Form>
+        </Col>
+      </Row>
+    </Container>
   );
 }
 

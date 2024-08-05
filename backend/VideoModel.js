@@ -1,3 +1,5 @@
+// VideoModel.js
+
 const mongoose = require('mongoose');
 
 const videoSchema = new mongoose.Schema({
@@ -6,6 +8,7 @@ const videoSchema = new mongoose.Schema({
   size: Number,
   duration: Number,
   thumbnail: String,
+  likes: { type: Number, default: 0 }, // Add a likes field with a default value
   uploadedAt: { type: Date, default: Date.now }
 });
 

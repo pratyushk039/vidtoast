@@ -1,119 +1,157 @@
+// index.js
+
 const express = require('express');
 const fs = require('fs');
-const multer = require('multer');
 const path = require('path');
-const getVideoInfo = require('get-video-info');
+const multer = require('multer');
 const ffmpeg = require('fluent-ffmpeg');
-const mongoose = require('mongoose');
+const Video = require('./VideoModel'); // Import Video model
+const connectDB = require('./db'); // Import database connection
 const app = express();
+const cors = require('cors')
+
 const port = 8000;
 
-// Connect to MongoDB
-mongoose.connect('mongodb://localhost:27017/videoDB', { useNewUrlParser: true, useUnifiedTopology: true });
+app.use(express.json()); // Middleware to parse JSON
+app.use(cors())
 
-// Define a schema and model for video metadata
-const videoSchema = new mongoose.Schema({
-    filename: String,
-    path: String,
-    size: Number,
-    duration: Number,
-    thumbnail: String,
-    uploadDate: { type: Date, default: Date.now }
-});
-const Video = mongoose.model('Video', videoSchema);
+// Connect to MongoDB
+connectDB();
 
 // Setup Multer for file uploads
 const storage = multer.diskStorage({
-    destination: function (req, file, cb) {
-        cb(null, 'uploads/');
-    },
-    filename: function (req, file, cb) {
-        cb(null, Date.now() + path.extname(file.originalname)); // Appending extension
-    }
+  destination: function (req, file, cb) {
+    cb(null, 'uploads/');
+  },
+  filename: function (req, file, cb) {
+    cb(null, Date.now() + path.extname(file.originalname)); // Appending extension
+  }
 });
 
 const upload = multer({ storage: storage });
 
-app.post('/upload', upload.any(), async (req, res) => {
-    const videoFile = req.files[0];
-    console.log(videoFile);
-    if (!videoFile) {
-        console.log('hey');
-        return res.status(400).send('No file uploaded.');
-    }
+// Upload Video Endpoint
+app.post('/upload', upload.single('video'), async (req, res) => {
+  const videoFile = req.file;
 
-    const videoPath = path.join(__dirname, 'uploads', videoFile.filename);
-    const thumbnailPath = path.join(__dirname, 'uploads', 'thumbnails', `${videoFile.filename}.png`);
+  if (!videoFile) {
+    return res.status(400).send('No file uploaded.');
+  }
 
-    // Generate a thumbnail
-    ffmpeg(videoPath)
-        .on('end', () => {
-            console.log('Thumbnail created');
-        })
-        .on('error', (err) => {
-            console.error('Error creating thumbnail', err);
-        })
-        .screenshot({
-            count: 1,
-            folder: path.join(__dirname, 'uploads', 'thumbnails'),
-            filename: `${videoFile.filename}.png`,
-            size: '320x240',
+  const videoPath = path.join(__dirname, 'uploads', videoFile.filename);
+  const thumbnailPath = path.join(__dirname, 'uploads', 'thumbnails', `${videoFile.filename}.png`);
+
+  // Generate a thumbnail
+  ffmpeg(videoPath)
+    .on('end', async () => {
+      console.log('Thumbnail created');
+      
+      const videoInfo = await new Promise((resolve, reject) => {
+        ffmpeg.ffprobe(videoPath, (err, metadata) => {
+          if (err) reject(err);
+          resolve(metadata);
         });
+      });
 
-    const videoInfo = await getVideoInfo(videoPath);
-
-    // Create and save metadata in MongoDB
-    const metadata = new Video({
+      // Create and save metadata in MongoDB
+      const metadata = new Video({
         filename: videoFile.filename,
         path: videoPath,
         size: videoFile.size,
-        duration: videoInfo.duration,
+        duration: videoInfo.format.duration, // Use format.duration for video duration
         thumbnail: `uploads/thumbnails/${videoFile.filename}.png`,
-    });
-    await metadata.save();
+      });
+      await metadata.save();
 
-    res.send('File uploaded successfully.');
+      res.send('File uploaded successfully.');
+    })
+    .on('error', (err) => {
+      console.error('Error creating thumbnail', err);
+      res.status(500).send('Error processing video.');
+    })
+    .screenshot({
+      count: 1,
+      folder: path.join(__dirname, 'uploads', 'thumbnails'),
+      filename: `${videoFile.filename}.png`,
+      size: '320x240',
+    });
 });
 
-app.get('/video', (req, res) => {
-    // const range = req.headers.range;
-    // if (!range) {
-    //     return res.status(400).send("Requires Range header");
-    // }
-    const range = "10";
+// Stream Video Endpoint
+app.get('/video/:filename', (req, res) => {
+  const { filename } = req.params;
+  const videoPath = path.join(__dirname, 'uploads', filename);
 
-    const videoPath = "C:\\Users\\praty\\Desktop\\quick\\vidtoast\\uploads\\video.mp4";
-    const videoSize = fs.statSync(videoPath).size;
-    console.log(videoSize)
-    const CHUNK_SIZE = 10 ** 6; // 1MB
-    const start = Number(range.replace(/\D/g, ""));
-    const end = Math.min(start + CHUNK_SIZE, videoSize - 1);
+  // Check if the video file exists
+  if (!fs.existsSync(videoPath)) {
+    return res.status(404).send('Video not found.');
+  }
 
-    const contentLength = end - start + 1;
-    const headers = {
-        "Content-Range": `bytes ${start}-${end}/${videoSize}`,
-        "Accept-Ranges": "bytes",
-        "Content-Length": contentLength,
-        "Content-Type": "video/mp4",
+  const stat = fs.statSync(videoPath);
+  const fileSize = stat.size;
+  const range = req.headers.range;
+
+  if (range) {
+    const parts = range.replace(/bytes=/, "").split("-");
+    const start = parseInt(parts[0], 10);
+    const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+
+    if (start >= fileSize) {
+      res.status(416).send('Requested range not satisfiable\n' + start + ' >= ' + fileSize);
+      return;
+    }
+
+    const chunksize = (end - start) + 1;
+    const file = fs.createReadStream(videoPath, { start, end });
+    const head = {
+      'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+      'Accept-Ranges': 'bytes',
+      'Content-Length': chunksize,
+      'Content-Type': 'video/mp4',
     };
 
-    res.writeHead(206, headers);
-    const videoStream = fs.createReadStream(videoPath, { start, end });
-    videoStream.pipe(res);
-    // console.log('hey')
-    // return res.json(videoSize)
-
+    res.writeHead(206, head);
+    file.pipe(res);
+  } else {
+    const head = {
+      'Content-Length': fileSize,
+      'Content-Type': 'video/mp4',
+    };
+    res.writeHead(200, head);
+    fs.createReadStream(videoPath).pipe(res);
+  }
 });
 
+// Get Videos Endpoint
 app.get('/videos', async (req, res) => {
-    try {
-        const videos = await Video.find().sort({ uploadDate: -1 }).limit(4);
-        res.json(videos);
-    } catch (error) {
-        res.status(500).send('Error fetching videos');
+  try {
+    const videos = await Video.find().sort({ uploadDate: -1 });
+    res.json(videos);
+  } catch (error) {
+    res.status(500).send('Error fetching videos');
+  }
+});
+
+// Increment Likes Endpoint
+app.post('/video/:id/like', async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const video = await Video.findById(id);
+
+    if (!video) {
+      return res.status(404).send('Video not found.');
     }
+
+    video.likes += 1;
+    await video.save();
+
+    res.json({ likes: video.likes });
+  } catch (error) {
+    res.status(500).send('Error updating likes');
+  }
 });
 
 app.listen(port, () => {
-    console.log(`Server is running on http://localhost:${port}`);
+  console.log(`Server is running on http://localhost:${port}`);
 });
